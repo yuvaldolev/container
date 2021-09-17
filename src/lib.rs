@@ -1,7 +1,10 @@
 use std::error::Error;
+use std::os::unix::io::RawFd;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // use nix::sched;
+use nix::fcntl;
+use nix::fcntl::{FcntlArg, FdFlag};
 use nix::sys::socket;
 use nix::sys::socket::{AddressFamily, SockFlag, SockType};
 
@@ -13,12 +16,7 @@ pub fn run(opts: Opts) -> Result<(), Box<dyn Error>> {
     let hostname = choose_hostname();
 
     // Create a socketpair used to send messages from the parent to the child.
-    let (parent_socket, child_socket) = socket::socketpair(
-        AddressFamily::Unix,
-        SockType::SeqPacket,
-        None,
-        SockFlag::empty(),
-    )?;
+    let (parent_socket, child_socket) = create_socketpair()?;
 
     Ok(())
 }
@@ -76,4 +74,19 @@ fn choose_hostname() -> String {
         MINOR[ix % MINOR.len()],
         SUITS[ix / MINOR.len()]
     )
+}
+
+fn create_socketpair() -> nix::Result<(RawFd, RawFd)> {
+    // Create the socketpair.
+    let sockets = socket::socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::empty(),
+    )?;
+
+    // Set the first socket in the pair to close on exec.
+    fcntl::fcntl(sockets.0, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
+
+    Ok(sockets)
 }
