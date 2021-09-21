@@ -98,10 +98,12 @@ pub fn run(opts: Opts) -> Result<(), Box<dyn Error>> {
 }
 
 fn generate_uuid() -> Result<String, Utf8Error> {
+    // Generate a UUID.
     let mut buf: [u8; UUID_SIZE] = [0; UUID_SIZE];
     let uuid = Uuid::new_v4().to_simple();
     uuid.encode_lower(&mut buf);
 
+    // Select the first 12 bytes from the generated UUID.
     return Ok(std::str::from_utf8(&buf)?[..CONTAINER_UUID_SIZE].to_owned());
 }
 
