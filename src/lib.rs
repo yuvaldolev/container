@@ -2,29 +2,30 @@
 extern crate scopeguard;
 
 use std::error::Error;
-use std::fs;
-use std::fs::File;
-use std::io;
-use std::io::{Read, Write};
+use std::ffi::CString;
+use std::fs::{self, File};
+use std::io::{self, Read, Write};
 use std::mem;
 use std::os::unix::io::FromRawFd;
+use std::path::Path;
+use std::str::Utf8Error;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use libc::c_int;
-use nix::fcntl;
-use nix::fcntl::{FcntlArg, FdFlag};
-use nix::sched;
-use nix::sched::CloneFlags;
+use nix::fcntl::{self, FcntlArg, FdFlag};
+use nix::mount::{self, MntFlags, MsFlags};
+use nix::sched::{self, CloneFlags};
 use nix::sys::signal::Signal;
-use nix::sys::socket;
-use nix::sys::socket::{AddressFamily, SockFlag, SockType};
+use nix::sys::socket::{self, AddressFamily, SockFlag, SockType};
 use nix::sys::wait;
-use nix::unistd::Pid;
+use nix::unistd::{self, Gid, Pid, Uid};
+use uuid::Uuid;
 
 mod opts;
 pub use opts::Opts;
 
-const STACK_SIZE: usize = 1024 * 1024;
+const UUID_SIZE: usize = 32;
+const CONTAINER_UUID_SIZE: usize = 12;
 
 const MAJOR: [&str; 22] = [
     "fool",
@@ -56,13 +57,15 @@ const MINOR: [&str; 14] = [
 ];
 const SUITS: [&str; 4] = ["swords", "wands", "pentacles", "cups"];
 
+const STACK_SIZE: usize = 1024 * 1024;
+
 const UID_MAP_FILE_NAMES: [&str; 2] = ["uid_map", "gid_map"];
-const USERNS_OFFSET: u32 = 10000;
-const USERNS_COUNT: u32 = 2000;
+const USERNS_OFFSET: u32 = 0;
+const USERNS_COUNT: u32 = 4294967295;
 
 pub fn run(opts: Opts) -> Result<(), Box<dyn Error>> {
-    // Choose the container's hostname.
-    let hostname = choose_hostname();
+    let uuid = generate_uuid()?;
+    println!("UUID: {}", uuid);
 
     // Create a socketpair used to send messages from the parent to the child.
     let (mut parent_socket, mut child_socket) = create_socketpair()?;
@@ -76,7 +79,7 @@ pub fn run(opts: Opts) -> Result<(), Box<dyn Error>> {
         | CloneFlags::CLONE_NEWNET
         | CloneFlags::CLONE_NEWUTS;
     let child_pid = sched::clone(
-        Box::new(|| child(&mut child_socket)),
+        Box::new(|| child(&opts.mount, opts.uid, &opts.command, &mut child_socket)),
         &mut clone_stack,
         clone_flags,
         Some(Signal::SIGCHLD as c_int),
@@ -85,9 +88,8 @@ pub fn run(opts: Opts) -> Result<(), Box<dyn Error>> {
     // Defer waiting for the child process to exit.
     defer! { let _ = wait::waitpid(Some(child_pid), None); };
 
-    // // Close the child socket as it is not required from the parent.
-    // let _ = unistd::close(child_socket);
-    // child_socket = -1;
+    // Close the child socket as it is not used by the parent.
+    drop(child_socket);
 
     // Configure the child's user namespace.
     handle_child_uid_map(child_pid, &mut parent_socket)?;
@@ -95,29 +97,12 @@ pub fn run(opts: Opts) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn choose_hostname() -> String {
-    // Retrieve the current time since the epoch in nanoseconds.
-    let now = SystemTime::now();
-    let duration_since_epoch = now.duration_since(UNIX_EPOCH).expect("Time went backwards");
-    let seconds = duration_since_epoch.as_secs();
-    let seconds_hex = format!("{:x}", seconds);
-    let nanos = duration_since_epoch.as_nanos();
+fn generate_uuid() -> Result<String, Utf8Error> {
+    let mut buf: [u8; UUID_SIZE] = [0; UUID_SIZE];
+    let uuid = Uuid::new_v4().to_simple();
+    uuid.encode_lower(&mut buf);
 
-    // Calculate the IX value.
-    let mut ix = (nanos as usize) % 78;
-
-    // Pick a hostname.
-    if ix < MAJOR.len() {
-        return format!("{:0>5.5}-{}", seconds_hex, MAJOR[ix]);
-    }
-
-    ix -= MAJOR.len();
-    format!(
-        "{:0>5.5}c-{}-of-{}",
-        seconds_hex,
-        MINOR[ix % MINOR.len()],
-        SUITS[ix / MINOR.len()]
-    )
+    return Ok(std::str::from_utf8(&buf)?[..CONTAINER_UUID_SIZE].to_owned());
 }
 
 fn create_socketpair() -> nix::Result<(File, File)> {
@@ -155,6 +140,9 @@ fn handle_child_uid_map(child_pid: Pid, socket: &mut File) -> io::Result<()> {
         }
     }
 
+    // Flush stdout to sync with the child process's prints.
+    io::stdout().flush().unwrap();
+
     // Send a success(0) result to the child.
     let result: u64 = 0;
     let result_bytes = result.to_le_bytes();
@@ -163,17 +151,115 @@ fn handle_child_uid_map(child_pid: Pid, socket: &mut File) -> io::Result<()> {
     Ok(())
 }
 
-fn child(socket: &mut File) -> isize {
-    if let Err(e) = userns(socket) {
+fn child(mount_image: &str, uid: u32, command: &Vec<String>, socket: &mut File) -> isize {
+    // Handle mounts.
+    if let Err(e) = mounts(mount_image) {
+        println!("mounts failed, error: {}", e);
+        return 1;
+    }
+
+    // Handle user namespaces and set UID / GID.
+    if let Err(e) = userns(uid, socket) {
         println!("userns failed, error: {}", e);
         return 1;
     }
 
-    0
+    // Close the socket ahead of execve.
+    drop(socket);
+
+    // Execute the requested command.
+    if command.is_empty() {
+        println!("empty command!");
+        return 1;
+    }
+
+    let mut command_cstr = Vec::new();
+    for arg in command {
+        match CString::new(&arg[..]) {
+            Ok(cstr) => command_cstr.push(cstr),
+            Err(e) => {
+                println!("CString::new failed for arg: {}, error: {}", arg, e);
+                return 1;
+            }
+        }
+    }
+    let environ: Vec<CString> = Vec::new();
+    if let Err(e) = unistd::execve(&command_cstr[0], &command_cstr, &environ) {
+        println!("execve failed, error: {}", e);
+        return 1;
+    }
+
+    1
 }
 
-fn userns(socket: &mut File) -> io::Result<()> {
+fn mounts(mount_image: &str) -> Result<(), Box<dyn Error>> {
+    // Remount all mounts as private so that they will not be shared
+    // with the parent process.
+    print!("=> remounting everything with MS_PRIVATE... ");
+    mount::mount::<str, str, str, str>(
+        None,
+        "/",
+        None,
+        MsFlags::MS_REC | MsFlags::MS_PRIVATE,
+        None,
+    )?;
+    println!("remounted.");
+
+    // Create a temporary directory to bind mount the image to.
+    print!(
+        "=> making a temp directory and a bind mounting \"{}\" there... ",
+        mount_image
+    );
+    let tmp_dir = tempfile::tempdir()?.into_path();
+
+    // Bind mount the image to the temporary directory.
+    mount::mount::<str, Path, str, str>(
+        Some(mount_image),
+        &tmp_dir,
+        None,
+        MsFlags::MS_BIND | MsFlags::MS_PRIVATE,
+        None,
+    )?;
+
+    // Create a temporary directory inside the previously created temporary
+    // directory, to which the old root directory will be mounted.
+    let inner_tmp_dir = tempfile::tempdir_in(&tmp_dir)?;
+    println!("done.");
+
+    // Pivot the root directory to the temporary directory to which
+    // the image has been mounted.
+    print!("=> pivoting root... ");
+    unistd::pivot_root(&tmp_dir, inner_tmp_dir.path())?;
+    unistd::chroot("/")?;
+    unistd::chdir("/")?;
+    println!("done.");
+
+    // Unmount the old root directory.
+    let old_root_dir = Path::new("/").join(inner_tmp_dir.path().file_name().unwrap());
+    print!("=> unmounting old root... ");
+    mount::umount2(&old_root_dir, MntFlags::MNT_DETACH)?;
+    fs::remove_dir(old_root_dir)?;
+    println!("done.");
+
+    // Mount /proc.
+    print!("=> mounting /proc... ");
+    mount::mount::<str, str, str, str>(
+        Some("proc"),
+        "/proc",
+        Some("proc"),
+        MsFlags::empty(),
+        None,
+    )?;
+    println!("mounted.");
+
+    Ok(())
+}
+
+fn userns(uid: u32, socket: &mut File) -> io::Result<()> {
     print!("=> trying a user namespace... ");
+
+    // Flush stdout to sync wit the parent process's prints.
+    io::stdout().flush().unwrap();
 
     // Check if the host OS supports user namespaces.
     let mut has_userns = true;
@@ -194,6 +280,14 @@ fn userns(socket: &mut File) -> io::Result<()> {
     } else {
         println!("unsupported? continuing.");
     }
+
+    // Set the process's group access list, UID and GID.
+    println!("=> switching to uid {0} / gid {0}...", uid);
+    let nix_uid = Uid::from_raw(uid);
+    let nix_gid = Gid::from_raw(uid);
+    unistd::setgroups(&[nix_gid])?;
+    unistd::setresuid(nix_uid, nix_uid, nix_uid)?;
+    unistd::setresgid(nix_gid, nix_gid, nix_gid)?;
 
     Ok(())
 }
