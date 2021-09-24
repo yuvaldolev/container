@@ -1,10 +1,8 @@
-use std::error::Error;
-
 use clap::Clap;
 
 use container::Opts;
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> anyhow::Result<()> {
     let opts = Opts::parse();
     container::run(opts)?;
 

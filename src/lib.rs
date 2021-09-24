@@ -32,7 +32,7 @@ const UID_MAP_FILE_NAMES: [&str; 2] = ["uid_map", "gid_map"];
 const USERNS_OFFSET: u32 = 0;
 const USERNS_COUNT: u32 = 4294967295;
 
-pub fn run(opts: Opts) -> Result<(), Box<dyn Error>> {
+pub fn run(opts: Opts) -> anyhow::Result<()> {
     let container = Container::new(opts.image.clone());
     println!("{:?}", container);
     // print!("=> generating uuid... ");
@@ -178,7 +178,7 @@ fn child(
     1
 }
 
-fn mounts(image_path: &str) -> Result<(), Box<dyn Error>> {
+fn mounts(image_path: &str) -> anyhow::Result<()> {
     // Remount all mounts as private so that they will not be shared
     // with the parent process.
     print!("=> remounting everything with MS_PRIVATE... ");
