@@ -9,7 +9,6 @@ use std::mem;
 use std::os::unix::io::FromRawFd;
 use std::path::Path;
 use std::str::Utf8Error;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use libc::c_int;
 use nix::fcntl::{self, FcntlArg, FdFlag};
@@ -27,36 +26,6 @@ pub use opts::Opts;
 const UUID_SIZE: usize = 32;
 const CONTAINER_UUID_SIZE: usize = 12;
 
-const MAJOR: [&str; 22] = [
-    "fool",
-    "magician",
-    "high-priestess",
-    "empress",
-    "emperor",
-    "hierophant",
-    "lovers",
-    "chariot",
-    "strength",
-    "hermit",
-    "wheel",
-    "justice",
-    "hanged-man",
-    "death",
-    "temperance",
-    "devil",
-    "tower",
-    "star",
-    "moon",
-    "sun",
-    "judgment",
-    "world",
-];
-const MINOR: [&str; 14] = [
-    "ace", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "page",
-    "knight", "queen", "king",
-];
-const SUITS: [&str; 4] = ["swords", "wands", "pentacles", "cups"];
-
 const STACK_SIZE: usize = 1024 * 1024;
 
 const UID_MAP_FILE_NAMES: [&str; 2] = ["uid_map", "gid_map"];
@@ -64,8 +33,9 @@ const USERNS_OFFSET: u32 = 0;
 const USERNS_COUNT: u32 = 4294967295;
 
 pub fn run(opts: Opts) -> Result<(), Box<dyn Error>> {
+    print!("=> generating uuid... ");
     let uuid = generate_uuid()?;
-    println!("UUID: {}", uuid);
+    println!("{}. done.", uuid);
 
     // Create a socketpair used to send messages from the parent to the child.
     let (mut parent_socket, mut child_socket) = create_socketpair()?;
@@ -79,7 +49,15 @@ pub fn run(opts: Opts) -> Result<(), Box<dyn Error>> {
         | CloneFlags::CLONE_NEWNET
         | CloneFlags::CLONE_NEWUTS;
     let child_pid = sched::clone(
-        Box::new(|| child(&opts.mount, opts.uid, &opts.command, &mut child_socket)),
+        Box::new(|| {
+            child(
+                &uuid,
+                &opts.image,
+                opts.uid,
+                &opts.command,
+                &mut child_socket,
+            )
+        }),
         &mut clone_stack,
         clone_flags,
         Some(Signal::SIGCHLD as c_int),
@@ -153,9 +131,22 @@ fn handle_child_uid_map(child_pid: Pid, socket: &mut File) -> io::Result<()> {
     Ok(())
 }
 
-fn child(mount_image: &str, uid: u32, command: &Vec<String>, socket: &mut File) -> isize {
+fn child(
+    uuid: &str,
+    image_path: &str,
+    uid: u32,
+    command: &Vec<String>,
+    socket: &mut File,
+) -> isize {
+    // Set the container's host name.
+    print!("=> setting host name... ");
+    if let Err(e) = unistd::sethostname(uuid) {
+        println!("failed, error: {}", e);
+    }
+    println!("done.");
+
     // Handle mounts.
-    if let Err(e) = mounts(mount_image) {
+    if let Err(e) = mounts(image_path) {
         println!("mounts failed, error: {}", e);
         return 1;
     }
@@ -166,7 +157,7 @@ fn child(mount_image: &str, uid: u32, command: &Vec<String>, socket: &mut File) 
         return 1;
     }
 
-    // Close the socket ahead of execve.
+    // Close the socket ahead of execvp.
     drop(socket);
 
     // Execute the requested command.
@@ -185,16 +176,15 @@ fn child(mount_image: &str, uid: u32, command: &Vec<String>, socket: &mut File) 
             }
         }
     }
-    let environ: Vec<CString> = Vec::new();
-    if let Err(e) = unistd::execve(&command_cstr[0], &command_cstr, &environ) {
-        println!("execve failed, error: {}", e);
+    if let Err(e) = unistd::execvp(&command_cstr[0], &command_cstr) {
+        println!("execvp failed, error: {}", e);
         return 1;
     }
 
     1
 }
 
-fn mounts(mount_image: &str) -> Result<(), Box<dyn Error>> {
+fn mounts(image_path: &str) -> Result<(), Box<dyn Error>> {
     // Remount all mounts as private so that they will not be shared
     // with the parent process.
     print!("=> remounting everything with MS_PRIVATE... ");
@@ -209,14 +199,14 @@ fn mounts(mount_image: &str) -> Result<(), Box<dyn Error>> {
 
     // Create a temporary directory to bind mount the image to.
     print!(
-        "=> making a temp directory and a bind mounting \"{}\" there... ",
-        mount_image
+        "=> making a temp directory and bind mounting \"{}\" there... ",
+        image_path
     );
     let tmp_dir = tempfile::tempdir()?.into_path();
 
     // Bind mount the image to the temporary directory.
     mount::mount::<str, Path, str, str>(
-        Some(mount_image),
+        Some(image_path),
         &tmp_dir,
         None,
         MsFlags::MS_BIND | MsFlags::MS_PRIVATE,

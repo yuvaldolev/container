@@ -4,7 +4,7 @@ use clap::{AppSettings, Clap};
 #[clap(version = "1.0", author = "ydolev")]
 #[clap(setting = AppSettings::ColoredHelp)]
 pub struct Opts {
-    pub mount: String,
+    pub image: String,
     pub uid: u32,
     pub command: Vec<String>,
 }
