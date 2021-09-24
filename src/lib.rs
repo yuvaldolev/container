@@ -20,11 +20,11 @@ use nix::sys::wait;
 use nix::unistd::{self, Gid, Pid, Uid};
 use uuid::Uuid;
 
+mod container;
+use container::Container;
+
 mod opts;
 pub use opts::Opts;
-
-const UUID_SIZE: usize = 32;
-const CONTAINER_UUID_SIZE: usize = 12;
 
 const STACK_SIZE: usize = 1024 * 1024;
 
@@ -33,56 +33,50 @@ const USERNS_OFFSET: u32 = 0;
 const USERNS_COUNT: u32 = 4294967295;
 
 pub fn run(opts: Opts) -> Result<(), Box<dyn Error>> {
-    print!("=> generating uuid... ");
-    let uuid = generate_uuid()?;
-    println!("{}. done.", uuid);
+    let container = Container::new(opts.image.clone());
+    println!("{:?}", container);
+    // print!("=> generating uuid... ");
+    // let uuid = generate_uuid()?;
+    // println!("{}. done.", uuid);
 
-    // Create a socketpair used to send messages from the parent to the child.
-    let (mut parent_socket, mut child_socket) = create_socketpair()?;
+    // Create a socketpair used to send messages between the parent and the child.
+    // let (mut parent_socket, mut child_socket) = create_socketpair()?;
 
     // Clone a child process with all the relevant new namespaces.
-    let mut clone_stack: Vec<u8> = vec![0; STACK_SIZE];
-    let clone_flags = CloneFlags::CLONE_NEWNS
-        | CloneFlags::CLONE_NEWCGROUP
-        | CloneFlags::CLONE_NEWPID
-        | CloneFlags::CLONE_NEWIPC
-        | CloneFlags::CLONE_NEWNET
-        | CloneFlags::CLONE_NEWUTS;
-    let child_pid = sched::clone(
-        Box::new(|| {
-            child(
-                &uuid,
-                &opts.image,
-                opts.uid,
-                &opts.command,
-                &mut child_socket,
-            )
-        }),
-        &mut clone_stack,
-        clone_flags,
-        Some(Signal::SIGCHLD as c_int),
-    )?;
+    // exec(container);
 
-    // Defer waiting for the child process to exit.
-    defer! { let _ = wait::waitpid(Some(child_pid), None); };
+    // let mut clone_stack: Vec<u8> = vec![0; STACK_SIZE];
+    // let clone_flags = CloneFlags::CLONE_NEWNS
+    //     | CloneFlags::CLONE_NEWCGROUP
+    //     | CloneFlags::CLONE_NEWPID
+    //     | CloneFlags::CLONE_NEWIPC
+    //     | CloneFlags::CLONE_NEWNET
+    //     | CloneFlags::CLONE_NEWUTS;
+    // let child_pid = sched::clone(
+    //     Box::new(|| {
+    //         child(
+    //             &uuid,
+    //             &opts.image,
+    //             opts.uid,
+    //             &opts.command,
+    //             &mut child_socket,
+    //         )
+    //     }),
+    //     &mut clone_stack,
+    //     clone_flags,
+    //     Some(Signal::SIGCHLD as c_int),
+    // )?;
 
-    // Close the child socket as it is not used by the parent.
-    drop(child_socket);
+    // // Defer waiting for the child process to exit.
+    // defer! { let _ = wait::waitpid(Some(child_pid), None); };
 
-    // Configure the child's user namespace.
-    handle_child_uid_map(child_pid, &mut parent_socket)?;
+    // // Close the child socket as it is not used by the parent.
+    // drop(child_socket);
+
+    // // Configure the child's user namespace.
+    // handle_child_uid_map(child_pid, &mut parent_socket)?;
 
     Ok(())
-}
-
-fn generate_uuid() -> Result<String, Utf8Error> {
-    // Generate a UUID.
-    let mut buf: [u8; UUID_SIZE] = [0; UUID_SIZE];
-    let uuid = Uuid::new_v4().to_simple();
-    uuid.encode_lower(&mut buf);
-
-    // Select the first 12 bytes from the generated UUID.
-    return Ok(std::str::from_utf8(&buf)?[..CONTAINER_UUID_SIZE].to_owned());
 }
 
 fn create_socketpair() -> nix::Result<(File, File)> {
