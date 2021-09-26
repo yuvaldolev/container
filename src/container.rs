@@ -1,10 +1,11 @@
+use std::fs;
 use std::path::PathBuf;
 use std::str::Utf8Error;
 
 use uuid::Uuid;
 
-const ROOT_DIR: &str = "/var/container";
-const CONTAINERS_DIR: &str = "containers";
+use crate::settings::Settings;
+
 const FS_DIR: &str = "fs";
 
 const UUID_SIZE: usize = 32;
@@ -19,24 +20,24 @@ pub struct Container {
 }
 
 impl Container {
-    pub fn new(image: String) -> anyhow::Result<Self> {
-        // Generate the container's uuid.
-        let uuid = Self::generate_uuid()?;
+    pub fn new(image: String, settings: &Settings) -> anyhow::Result<Self> {
+        let mut container = Self {
+            image,
+            uuid: Self::generate_uuid()?,
+            dir: PathBuf::new(),
+            fs_dir: PathBuf::new(),
+        };
 
         // Generate the container's directory paths.
-        let mut dir = PathBuf::new();
-        dir.push(ROOT_DIR);
-        dir.push(CONTAINERS_DIR);
-        dir.push(&uuid);
+        container.dir.push(&settings.disk.containers_dir);
+        container.dir.push(&container.uuid);
+        container.fs_dir = container.dir.join(FS_DIR);
 
-        let fs_dir = dir.join(FS_DIR);
+        // Create the container directories.
+        // fs::create_dir(&container.dir)?;
+        // fs::create_dir(&container.fs_dir)?;
 
-        Ok(Self {
-            image,
-            uuid,
-            dir,
-            fs_dir,
-        })
+        Ok(container)
     }
 
     fn generate_uuid() -> Result<String, Utf8Error> {

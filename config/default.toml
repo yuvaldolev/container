@@ -1,0 +1,4 @@
+[disk]
+root_dir = "/var/container"
+images_dir = "/var/container/images"
+containers_dir = "/var/container/containers"

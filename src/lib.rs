@@ -1,6 +1,9 @@
 #[macro_use(defer)]
 extern crate scopeguard;
 
+#[macro_use]
+extern crate serde_derive;
+
 use std::error::Error;
 use std::ffi::CString;
 use std::fs::{self, File};
@@ -23,8 +26,17 @@ use uuid::Uuid;
 mod container;
 use container::Container;
 
+mod executor;
+use executor::Executor;
+
+mod image;
+use image::Image;
+
 mod opts;
 pub use opts::Opts;
+
+mod settings;
+use settings::Settings;
 
 const STACK_SIZE: usize = 1024 * 1024;
 
@@ -33,8 +45,19 @@ const USERNS_OFFSET: u32 = 0;
 const USERNS_COUNT: u32 = 4294967295;
 
 pub fn run(opts: Opts) -> anyhow::Result<()> {
-    let container = Container::new(opts.image.clone());
-    println!("{:?}", container);
+    // Read the configuration.
+    let settings = Settings::new()?;
+
+    // Create an Image instance to validate and wrap the given image.
+    let image = Image::new(opts.image.clone(), &settings)?;
+
+    // Create a new container with the given image.
+    let container = Container::new(opts.image.clone(), &settings)?;
+
+    // Execute the given command in the container.
+    let executor = Executor::new();
+    executor.execute(&container, &opts.command);
+
     // print!("=> generating uuid... ");
     // let uuid = generate_uuid()?;
     // println!("{}. done.", uuid);
