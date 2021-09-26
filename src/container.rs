@@ -4,7 +4,7 @@ use std::str::Utf8Error;
 
 use uuid::Uuid;
 
-use crate::settings::Settings;
+use crate::{image::Image, settings::Settings};
 
 const FS_DIR: &str = "fs";
 
@@ -13,17 +13,17 @@ const CONTAINER_UUID_SIZE: usize = 12;
 
 #[derive(Debug)]
 pub struct Container {
-    image: String,
     uuid: String,
+    image: Image,
     dir: PathBuf,
-    fs_dir: PathBuf,
+    pub fs_dir: PathBuf,
 }
 
 impl Container {
-    pub fn new(image: String, settings: &Settings) -> anyhow::Result<Self> {
+    pub fn new(image: Image, settings: &Settings) -> anyhow::Result<Self> {
         let mut container = Self {
-            image,
             uuid: Self::generate_uuid()?,
+            image: image,
             dir: PathBuf::new(),
             fs_dir: PathBuf::new(),
         };
@@ -34,8 +34,8 @@ impl Container {
         container.fs_dir = container.dir.join(FS_DIR);
 
         // Create the container directories.
-        // fs::create_dir(&container.dir)?;
-        // fs::create_dir(&container.fs_dir)?;
+        fs::create_dir(&container.dir)?;
+        fs::create_dir(&container.fs_dir)?;
 
         Ok(container)
     }

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use crate::settings::Settings;
 
+#[derive(Debug, Clone)]
 pub struct Image {
     name: String,
     path: PathBuf,
