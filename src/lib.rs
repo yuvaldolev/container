@@ -5,7 +5,7 @@ extern crate scopeguard;
 extern crate serde_derive;
 
 mod container;
-// mod executor;
+mod executor;
 mod image;
 mod invalid_command_error;
 mod opts;
@@ -13,19 +13,12 @@ mod settings;
 
 pub use opts::Opts;
 
-// use std::error::Error;
-use std::str::Utf8Error;
-
 use container::Container;
-// use executor::Executor;
+use executor::Executor;
 use image::Image;
 use settings::Settings;
 
 pub fn run(opts: Opts) -> anyhow::Result<()> {
-    println!(
-        "Error: {}",
-        invalid_command_error::InvalidCommandError::Empty
-    );
     // Read the configuration.
     let settings = Settings::new()?;
 
@@ -36,14 +29,8 @@ pub fn run(opts: Opts) -> anyhow::Result<()> {
     let container = Container::new(image.clone(), &settings)?;
 
     // Execute the given command in the container.
-    // let executor = Executor::new();
-    // executor.execute(&container, &opts.command);
-
-    test()?;
+    let executor = Executor::new();
+    executor.execute(&container, &opts.command)?;
 
     Ok(())
-}
-
-fn test() -> anyhow::Result<()> {
-    Err(invalid_command_error::InvalidCommandError::Empty.into())
 }

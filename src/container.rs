@@ -4,7 +4,8 @@ use std::str::Utf8Error;
 
 use uuid::Uuid;
 
-use crate::{image::Image, settings::Settings};
+use crate::image::Image;
+use crate::settings::Settings;
 
 const FS_DIR: &str = "fs";
 
@@ -13,7 +14,7 @@ const CONTAINER_UUID_SIZE: usize = 12;
 
 #[derive(Debug)]
 pub struct Container {
-    uuid: String,
+    pub uuid: String,
     image: Image,
     dir: PathBuf,
     pub fs_dir: PathBuf,

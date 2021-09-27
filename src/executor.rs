@@ -6,6 +6,7 @@ use std::os::unix::io::FromRawFd;
 use std::path::Path;
 
 use libc::c_int;
+use nix::errno::Errno;
 use nix::fcntl::{self, FcntlArg, FdFlag};
 use nix::mount::{self, MntFlags, MsFlags};
 use nix::sched::{self, CloneFlags};
@@ -33,7 +34,7 @@ impl Executor {
     pub fn execute(&self, container: &Container, command: &Vec<String>) -> anyhow::Result<()> {
         // Validate the command.
         if command.is_empty() {
-            return Err(InvalidCommandError::Empty);
+            return Err(InvalidCommandError::Empty.into());
         }
 
         // Create a socketpair used to send messages between the parent and the child.
@@ -50,7 +51,7 @@ impl Executor {
         let child_pid = sched::clone(
             Box::new(|| {
                 if let Err(e) = Self::child(container, command, &mut child_socket) {
-                    println!("Error in child process: {}", e);
+                    println!("error in child process: {}", e);
                     return 1;
                 }
 
@@ -102,7 +103,7 @@ impl Executor {
         println!("done.");
 
         // Handle mounts.
-        Self::mounts(&container.image)?;
+        Self::mounts(&container)?;
 
         // Handle user namespaces and set UID / GID.
         Self::userns(socket)?;
@@ -115,9 +116,9 @@ impl Executor {
         for arg in command {
             command_cstr.push(CString::new(&arg[..])?);
         }
-        unistd::execvp(&command_cstr[0], &command_cstr);
+        unistd::execvp(&command_cstr[0], &command_cstr)?;
 
-        Err()
+        Err(Errno::last().into())
     }
 
     fn handle_child_uid_map(child_pid: Pid, socket: &mut File) -> io::Result<()> {
@@ -164,12 +165,12 @@ impl Executor {
         // Create a temporary directory to bind mount the image to.
         print!(
             "=> making a temp directory and bind mounting \"{}\" there... ",
-            &container.fs_dir
+            &container.fs_dir.as_os_str().to_str().unwrap()
         );
         let tmp_dir = tempfile::tempdir()?.into_path();
 
         // Bind mount the image to the temporary directory.
-        mount::mount::<str, Path, str, str>(
+        mount::mount::<Path, Path, str, str>(
             Some(&container.fs_dir),
             &tmp_dir,
             None,
