@@ -33,6 +33,10 @@ impl Container {
 
         // Create the container's file system snapshot.
         let fs_dir = dir.join(FS_DIR);
+        println!("{:?}", fs_dir);
+        println!("{}", image.name);
+        println!("{:?}", image.subvolume.info());
+        println!("{:?}", std::io::Error::last_os_error());
         let fs = image.subvolume.snapshot(fs_dir, None, None)?;
 
         Ok(Self { uuid, dir, fs })

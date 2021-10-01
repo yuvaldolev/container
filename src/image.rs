@@ -8,7 +8,7 @@ use crate::settings::Settings;
 
 #[derive(Debug, Clone)]
 pub struct Image {
-    name: String,
+    pub name: String,
     pub subvolume: Subvolume,
 }
 
@@ -39,6 +39,7 @@ impl Image {
             return Err(io::Error::new(io::ErrorKind::NotFound, "Image does not exist").into());
         }
 
+        println!("{:?}", path);
         return Ok(Self {
             name,
             subvolume: Subvolume::get(path)?,
