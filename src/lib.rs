@@ -26,7 +26,7 @@ pub fn run(opts: Opts) -> anyhow::Result<()> {
     let image = Image::new(opts.image.clone(), &settings)?;
 
     // Create a new container with the given image.
-    let container = Container::new(image.clone(), &settings)?;
+    let container = Container::new(&image, &settings)?;
 
     // Execute the given command in the container.
     let executor = Executor::new();

@@ -165,13 +165,13 @@ impl Executor {
         // Create a temporary directory to bind mount the image to.
         print!(
             "=> making a temp directory and bind mounting \"{}\" there... ",
-            &container.fs_dir.as_os_str().to_str().unwrap()
+            container.fs.path()?.as_os_str().to_str().unwrap()
         );
         let tmp_dir = tempfile::tempdir()?.into_path();
 
         // Bind mount the image to the temporary directory.
         mount::mount::<Path, Path, str, str>(
-            Some(&container.fs_dir),
+            Some(&container.fs.path()?),
             &tmp_dir,
             None,
             MsFlags::MS_BIND | MsFlags::MS_PRIVATE,

@@ -2,6 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::str::Utf8Error;
 
+use btrfsutil::subvolume::Subvolume;
 use uuid::Uuid;
 
 use crate::image::Image;
@@ -15,30 +16,26 @@ const CONTAINER_UUID_SIZE: usize = 12;
 #[derive(Debug)]
 pub struct Container {
     pub uuid: String,
-    image: Image,
     dir: PathBuf,
-    pub fs_dir: PathBuf,
+    pub fs: Subvolume,
 }
 
 impl Container {
-    pub fn new(image: Image, settings: &Settings) -> anyhow::Result<Self> {
-        let mut container = Self {
-            uuid: Self::generate_uuid()?,
-            image: image,
-            dir: PathBuf::new(),
-            fs_dir: PathBuf::new(),
-        };
+    pub fn new(image: &Image, settings: &Settings) -> anyhow::Result<Self> {
+        // Generate the container's UUID.
+        let uuid = Self::generate_uuid()?;
 
-        // Generate the container's directory paths.
-        container.dir.push(&settings.disk.containers_dir);
-        container.dir.push(&container.uuid);
-        container.fs_dir = container.dir.join(FS_DIR);
+        // Generate the container's directory.
+        let mut dir = PathBuf::new();
+        dir.push(&settings.disk.containers_dir);
+        dir.push(&uuid);
+        fs::create_dir(&dir)?;
 
-        // Create the container directories.
-        fs::create_dir(&container.dir)?;
-        fs::create_dir(&container.fs_dir)?;
+        // Create the container's file system snapshot.
+        let fs_dir = dir.join(FS_DIR);
+        let fs = image.subvolume.snapshot(fs_dir, None, None)?;
 
-        Ok(container)
+        Ok(Self { uuid, dir, fs })
     }
 
     fn generate_uuid() -> Result<String, Utf8Error> {
